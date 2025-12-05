@@ -15,7 +15,7 @@ jobs:
 
     - name: Run ZAP Full Authenticated Scan
       run: |
-        docker run --rm \
+        docker run --name zapscan --rm \
           -v "$(pwd):/zap/wrk" \
           ghcr.io/zaproxy/zaproxy:stable \
           zap-full-scan.py \
@@ -27,10 +27,13 @@ jobs:
           -z "
             -config authentication.method=formBasedAuthentication
             -config authentication.loginPageUrl=https://demo.testfire.net/login.jsp
-            -config authentication.loginRequestUrl=https://demo.testfire.net/doLogin
-            -config authentication.loginRequestBody=uid=admin&passw=admin
+            -config authentication.loginRequestUrl=https://demo.testfire.net/login.jsp
+            -config authentication.loginRequestBody=uid=admin&passw=admin&btnSubmit=Login
             -config context.includePaths=https://demo.testfire.net.*
           " || true
+
+    - name: List files after scan
+      run: ls -R .
 
     - name: Upload ZAP Full Scan Reports
       uses: actions/upload-artifact@v4
