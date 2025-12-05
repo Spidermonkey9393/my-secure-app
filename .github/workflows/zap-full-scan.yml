@@ -8,10 +8,13 @@ on:
 jobs:
   zap-full-scan:
     runs-on: ubuntu-latest
+
     steps:
+      # Step 1: Checkout your repo
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Step 2: Run ZAP Full Authenticated Scan
       - name: Run ZAP Full Authenticated Scan
         run: |
           docker run --rm \
@@ -31,9 +34,11 @@ jobs:
               -config context.includePaths=https://demo.testfire.net.*
             " || true
 
+      # Step 3: Debug — List files to confirm reports exist
       - name: List files after scan
         run: ls -la /home/runner/work/my-secure-app/my-secure-app
 
+      # Step 4: Upload ZAP Reports as Artifacts
       - name: Upload ZAP Full Scan Reports
         uses: actions/upload-artifact@v4
         with:
@@ -41,3 +46,7 @@ jobs:
           path: |
             zap-full-report.html
             zap-full-report.xml
+          if-no-files-found: warn
+          compression-level: 6
+          overwrite: false
+          include-hidden-files: false
