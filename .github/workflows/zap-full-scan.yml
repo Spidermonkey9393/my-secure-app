@@ -32,7 +32,7 @@ jobs:
             -config context.includePaths=https://demo.testfire.net.*
           " || true
 
-    - name: Upload ZAP Reports
+    - name: Upload ZAP Full Scan Reports
       uses: actions/upload-artifact@v4
       with:
         name: zap-full-report
