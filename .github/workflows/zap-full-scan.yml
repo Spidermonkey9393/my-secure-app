@@ -1,0 +1,41 @@
+name: ZAP Full Scan - TestFire (Authenticated)
+
+on:
+  workflow_dispatch:
+  push:
+  pull_request:
+
+jobs:
+  zap-full-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Run ZAP Full Authenticated Scan
+      run: |
+        docker run --rm \
+          -v "$(pwd):/zap/wrk" \
+          ghcr.io/zaproxy/zaproxy:stable \
+          zap-full-scan.py \
+          -t https://demo.testfire.net \
+          -r /zap/wrk/zap-full-report.html \
+          -x /zap/wrk/zap-full-report.xml \
+          -j \
+          -d \
+          -z "
+            -config authentication.method=formBasedAuthentication
+            -config authentication.loginPageUrl=https://demo.testfire.net/login.jsp
+            -config authentication.loginRequestUrl=https://demo.testfire.net/doLogin
+            -config authentication.loginRequestBody=uid=admin&passw=admin
+            -config context.includePaths=https://demo.testfire.net.*
+          " || true
+
+    - name: Upload ZAP Reports
+      uses: actions/upload-artifact@v4
+      with:
+        name: zap-full-report
+        path: |
+          zap-full-report.html
+          zap-full-report.xml
