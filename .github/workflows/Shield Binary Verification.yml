@@ -1,0 +1,55 @@
+name: "Shield Binary Verification and Scan"
+
+on:
+  workflow_dispatch:   # allows manual trigger
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["dev", "stage", "main"]
+
+jobs:
+  verify-and-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify Shield binary checksum
+        run: |
+          set -euo pipefail
+          # Replace with vendor-provided SHA256 checksum
+          EXPECTED="abc123def456...your_vendor_hash_here..."
+          ACTUAL=$(sha256sum ./shield | awk '{print $1}')
+
+          echo "Expected: $EXPECTED"
+          echo "Actual:   $ACTUAL"
+
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "❌ Shield binary checksum mismatch!"
+            exit 1
+          else
+            echo "✅ Shield binary checksum verified."
+          fi
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
+      - name: Run Go example
+        run: |
+          set -euo pipefail
+          go run ./examples/go/main.go || true
+
+      - name: Initialize CodeQL (Go)
+        uses: github/codeql-action/init@v4
+        with:
+          languages: go
+          queries: security-extended
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:go"
+          output: codeql-results
