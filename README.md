@@ -1,2 +1,0 @@
-# my-secure-app
-NA
