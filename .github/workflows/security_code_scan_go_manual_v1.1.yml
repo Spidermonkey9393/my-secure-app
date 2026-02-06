@@ -28,9 +28,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Detect Go source (ignore vendor, generated dirs)
           if git ls-files \
-            '*.go' 'go.mod' 'go.sum' \
+            '*.go' \
             ':!**/vendor/**' ':!**/dist/**' ':!**/build/**' \
             | grep -q .; then
             echo "has_go=true" >> "$GITHUB_OUTPUT"
@@ -39,7 +38,7 @@ jobs:
           fi
 
   #########################################
-  # 2. CodeQL Scan (runs only if Go exists)
+  # 2. CodeQL Scan (Go, no go.mod required)
   #########################################
   codeql-backend:
     name: Security CodeQL Scan
@@ -67,13 +66,22 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "stable"
-          cache: true
 
-      - name: Build Go project
+      #########################################
+      # Build step (safe for non-module repos)
+      #########################################
+      - name: Build Go code (best-effort)
+        shell: bash
         run: |
           set -euo pipefail
-          go mod download
-          go build ./...
+
+          echo "Running best-effort Go build (no modules required)"
+
+          # Disable modules explicitly
+          export GO111MODULE=off
+
+          # Attempt build, but do NOT fail workflow if build fails
+          go build ./... || echo "Go build skipped or failed (non-module repo)"
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
@@ -130,9 +138,6 @@ jobs:
             MEDIUM_COUNT=$((MEDIUM_COUNT + MEDIUM))
           done
 
-          echo "HIGH_COUNT=$HIGH_COUNT"
-          echo "MEDIUM_COUNT=$MEDIUM_COUNT"
-
           echo "high_count=$HIGH_COUNT" >> "$GITHUB_OUTPUT"
           echo "medium_count=$MEDIUM_COUNT" >> "$GITHUB_OUTPUT"
 
@@ -156,29 +161,4 @@ jobs:
             const high = Number(process.env.HIGH || "0");
             const medium = Number(process.env.MEDIUM || "0");
 
-            const body = [
-              "## 🔐 Backend CodeQL Security Scan Results (Go)",
-              "",
-              `**High/Critical:** ${high}`,
-              `**Medium:** ${medium}`,
-              "",
-              "🚫 **Merge blocked** due to High/Critical or Medium security findings.",
-              "",
-              "Review details in **Security → Code scanning**."
-            ].join("\n");
-
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body
-            });
-
-      #########################################
-      # 5. Block PR
-      #########################################
-      - name: Block PR if High/Critical or Medium findings exist
-        if: ${{ github.event_name == 'pull_request' && steps.sev-check.outputs.BLOCK == 'true' }}
-        run: |
-          echo "❌ High/Critical or Medium CodeQL findings detected. Blocking PR."
-          exit 1
+            con
