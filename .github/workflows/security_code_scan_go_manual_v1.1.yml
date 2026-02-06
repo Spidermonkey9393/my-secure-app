@@ -1,3 +1,69 @@
+name: "Security CodeQL Scan"
+
+on:
+  pull_request:
+    branches: ["dev", "stage", "main"]
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  #########################################
+  # 1. Detect Go code
+  #########################################
+  detect-go:
+    name: Detect Go
+    runs-on: ubuntu-latest
+    outputs:
+      has_go: ${{ steps.detect.outputs.has_go }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: detect
+        shell: bash
+        run: |
+          if git ls-files '*.go' | grep -q .; then
+            echo "has_go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_go=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  #########################################
+  # 2. CodeQL Scan (Go)
+  #########################################
+  codeql-backend:
+    name: Security CodeQL Scan
+    needs: detect-go
+    if: ${{ needs.detect-go.outputs.has_go == 'true' && github.actor != 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
+      - name: Initialize CodeQL (Go)
+        uses: github/codeql-action/init@v4
+        with:
+          languages: go
+          queries: security-extended
+
+      #########################################
+      # 3. REQUIRED BUILD (works without go.mod)
+      #########################################
       - name: Build Go code (required for CodeQL)
         shell: bash
         run: |
@@ -17,3 +83,104 @@
 
             go build ./...
           fi
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:go"
+          output: codeql-results
+
+      #########################################
+      # 4. Severity Evaluation
+      #########################################
+      - name: Evaluate High/Critical and Medium findings
+        id: sev-check
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y jq
+
+          HIGH_COUNT=0
+          MEDIUM_COUNT=0
+          shopt -s nullglob
+
+          for sarif in codeql-results/*.sarif; do
+            HIGH=$(jq -r '
+              [ .runs[]?.results[]?
+                | select(
+                    (
+                      ((.properties["security-severity"] // "") | tostring | length) > 0
+                      and ((.properties["security-severity"] | tonumber) >= 7.0)
+                    )
+                    or (.level == "error")
+                  )
+              ] | length
+            ' "$sarif" 2>/dev/null || echo 0)
+
+            MEDIUM=$(jq -r '
+              [ .runs[]?.results[]?
+                | select(
+                    (
+                      ((.properties["security-severity"] // "") | tostring | length) > 0
+                      and ((.properties["security-severity"] | tonumber) >= 4.0)
+                      and ((.properties["security-severity"] | tonumber) < 7.0)
+                    )
+                    or (.level == "warning")
+                  )
+              ] | length
+            ' "$sarif" 2>/dev/null || echo 0)
+
+            HIGH_COUNT=$((HIGH_COUNT + HIGH))
+            MEDIUM_COUNT=$((MEDIUM_COUNT + MEDIUM))
+          done
+
+          echo "high_count=$HIGH_COUNT" >> "$GITHUB_OUTPUT"
+          echo "medium_count=$MEDIUM_COUNT" >> "$GITHUB_OUTPUT"
+
+          if [ "$HIGH_COUNT" -gt 0 ] || [ "$MEDIUM_COUNT" -gt 0 ]; then
+            echo "BLOCK=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "BLOCK=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      #########################################
+      # 5. PR Comment
+      #########################################
+      - name: Comment on PR (High/Critical or Medium)
+        if: ${{ github.event_name == 'pull_request' && steps.sev-check.outputs.BLOCK == 'true' }}
+        uses: actions/github-script@v8
+        env:
+          HIGH: ${{ steps.sev-check.outputs.high_count }}
+          MEDIUM: ${{ steps.sev-check.outputs.medium_count }}
+        with:
+          script: |
+            const high = Number(process.env.HIGH || "0");
+            const medium = Number(process.env.MEDIUM || "0");
+
+            const body = [
+              "## 🔐 Backend CodeQL Security Scan Results (Go)",
+              "",
+              `**High/Critical:** ${high}`,
+              `**Medium:** ${medium}`,
+              "",
+              "🚫 **Merge blocked** due to security findings.",
+              "",
+              "See **Security → Code scanning** for details."
+            ].join("\n");
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body
+            });
+
+      #########################################
+      # 6. Block PR
+      #########################################
+      - name: Block PR if High/Critical or Medium findings exist
+        if: ${{ github.event_name == 'pull_request' && steps.sev-check.outputs.BLOCK == 'true' }}
+        run: |
+          echo "❌ High/Critical or Medium CodeQL findings detected. Blocking PR."
+          exit 1
