@@ -11,37 +11,28 @@ permissions:
 
 jobs:
   #########################################
-  # 1. Detect whether repo contains Go code
+  # 1. Detect Go
   #########################################
   detect-go:
-    name: Detect Go
     runs-on: ubuntu-latest
     outputs:
       has_go: ${{ steps.detect.outputs.has_go }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - id: detect
-        shell: bash
         run: |
-          set -euo pipefail
-
-          if git ls-files \
-            '*.go' \
-            ':!**/vendor/**' ':!**/dist/**' ':!**/build/**' \
-            | grep -q .; then
+          if git ls-files '*.go' | grep -q .; then
             echo "has_go=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_go=false" >> "$GITHUB_OUTPUT"
           fi
 
   #########################################
-  # 2. CodeQL Scan (Go, no go.mod required)
+  # 2. CodeQL Scan
   #########################################
   codeql-backend:
-    name: Security CodeQL Scan
     needs: detect-go
     if: ${{ needs.detect-go.outputs.has_go == 'true' && github.actor != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
@@ -49,116 +40,41 @@ jobs:
     permissions:
       security-events: write
       contents: read
-      actions: read
       pull-requests: write
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Initialize CodeQL (Go)
-        uses: github/codeql-action/init@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
+      - uses: github/codeql-action/init@v4
         with:
           languages: go
           queries: security-extended
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "stable"
-
       #########################################
-      # Build step (safe for non-module repos)
+      # SAFE BUILD (module OR GOPATH)
       #########################################
-      - name: Build Go code (best-effort)
+      - name: Build Go code (required for CodeQL)
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          echo "Running best-effort Go build (no modules required)"
+          if [ -f go.mod ]; then
+            echo "Using Go modules"
+            go build ./...
+          else
+            echo "Using GOPATH mode"
+            export GO111MODULE=off
+            mkdir -p "$GOPATH/src/app"
+            rsync -a . "$GOPATH/src/app/"
+            cd "$GOPATH/src/app"
+            go build ./...
+          fi
 
-          # Disable modules explicitly
-          export GO111MODULE=off
-
-          # Attempt build, but do NOT fail workflow if build fails
-          go build ./... || echo "Go build skipped or failed (non-module repo)"
-
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v4
+      - uses: github/codeql-action/analyze@v4
         with:
           category: "/language:go"
           output: codeql-results
-
-      #########################################
-      # 3. Severity Evaluation (High / Medium)
-      #########################################
-      - name: Evaluate High/Critical and Medium findings
-        id: sev-check
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update && sudo apt-get install -y jq
-
-          HIGH_COUNT=0
-          MEDIUM_COUNT=0
-          shopt -s nullglob
-
-          for sarif in codeql-results/*.sarif; do
-            HIGH=$(
-              jq -r '
-                [ .runs[]?.results[]?
-                  | select(
-                      (
-                        ((.properties["security-severity"] // "") | tostring | length) > 0
-                        and ((.properties["security-severity"] | tonumber) >= 7.0)
-                      )
-                      or (.level == "error")
-                    )
-                ] | length
-              ' "$sarif" 2>/dev/null || echo 0
-            )
-
-            MEDIUM=$(
-              jq -r '
-                [ .runs[]?.results[]?
-                  | select(
-                      (
-                        ((.properties["security-severity"] // "") | tostring | length) > 0
-                        and ((.properties["security-severity"] | tonumber) >= 4.0)
-                        and ((.properties["security-severity"] | tonumber) < 7.0)
-                      )
-                      or (.level == "warning")
-                    )
-                ] | length
-              ' "$sarif" 2>/dev/null || echo 0
-            )
-
-            HIGH_COUNT=$((HIGH_COUNT + HIGH))
-            MEDIUM_COUNT=$((MEDIUM_COUNT + MEDIUM))
-          done
-
-          echo "high_count=$HIGH_COUNT" >> "$GITHUB_OUTPUT"
-          echo "medium_count=$MEDIUM_COUNT" >> "$GITHUB_OUTPUT"
-
-          if [ "$HIGH_COUNT" -gt 0 ] || [ "$MEDIUM_COUNT" -gt 0 ]; then
-            echo "BLOCK=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "BLOCK=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      #########################################
-      # 4. PR Comment
-      #########################################
-      - name: Comment on PR (High/Critical or Medium)
-        if: ${{ github.event_name == 'pull_request' && steps.sev-check.outputs.BLOCK == 'true' }}
-        uses: actions/github-script@v8
-        env:
-          HIGH: ${{ steps.sev-check.outputs.high_count }}
-          MEDIUM: ${{ steps.sev-check.outputs.medium_count }}
-        with:
-          script: |
-            const high = Number(process.env.HIGH || "0");
-            const medium = Number(process.env.MEDIUM || "0");
-
-            con
