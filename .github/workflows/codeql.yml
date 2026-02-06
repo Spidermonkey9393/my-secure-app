@@ -1,0 +1,50 @@
+name: "Advanced CodeQL Scan"
+
+on:
+  push:
+    branches: ["main", "dev", "stage"]
+  pull_request:
+    branches: ["main", "dev", "stage"]
+
+permissions:
+  contents: read
+
+jobs:
+  codeql:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
+      # Initialize CodeQL
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: go
+          queries: security-extended
+
+      # Build your Go project (required for CodeQL)
+      - name: Build Go code
+        run: |
+          go mod tidy
+          go mod download
+          go build ./...
+
+      # Run CodeQL analysis
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:go"
